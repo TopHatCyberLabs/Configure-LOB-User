@@ -217,6 +217,53 @@ function Get-RandomPassword() {
     return $TempPassword
 }
 
+function Add-VaultUser {
+    param ($vaultUserName)
+    #Test for existing vault user and create if it doesn't exist
+    try {
+        $userUri = $API_VaultUsers + '/' + $vaultUserName
+        if ($null -eq $(Get-VaultObject $userUri )) {
+            #User does not exist, so we need to create one
+            $vaultUserInitialPassword = Get-RandomPassword 
+            $createUserBody = @{ UserName = $vaultUserName; InitialPassword = $vaultUserInitialPassword; ChangePasswordOnTheNextLogon = $false; UserTypeName = "AppProvider"; Disabled = $false } | ConvertTo-Json
+            if ($null -ne $(Invoke-Rest -Command Post -URI $API_VaultUsers -Header $g_LogonHeader -Body $createUserBody)) {
+                        
+                Add-LogMsg -type Info -MSG "EPV User Account $($vaultUserName) successfully created."
+            } 
+            else {
+                Add-LogMsg -type Error -MSG "EPV User Account $($vaultUserName) could not be created."
+            }
+        }   
+        else {
+            #Write to log that the user already exists
+            Add-LogMsg -type Info -MSG "Vault User $($vaultUserName) already exists, will not create vault user."
+        }
+    }
+    catch {
+        Add-LogMsg -type Error -MSG $_.Exception
+    }
+}
+
+function Add-VaultUserAccount {
+    param ()
+    try {
+        #Future Feature - Search for Account before adding. 
+            $conjurHostCredentialsPath = Get-ChildItem -Name synchronizerConjurHost.xml -File -Path $ScriptLocation -Recurse
+            $conjurHostCredentials = Import-Clixml -Path $conjurHostCredentialsPath
+        
+            $newAccountBody = @{ platformId="ConjurHost";safeName="ConjurSync";secretType="password";secret=$conjurHostCredentials.GetNetworkCredential().password;platformAccountProperties= @{ ConjurAccount=$conjurAccountName; HostName=$conjurHostCredentials.UserName; ApplianceURL="https://"+$conjurServerDNS }} | ConvertTo-Json
+                if ($null -ne $(Invoke-Rest -Command Post -URI $API_Accounts -Header $g_LogonHeader -Body $newAccountBody)) {
+                            
+                    Add-LogMsg -type Info -MSG "Conjur Host $($conjurHostCredentials.Username) successfully added to CyberArk EPV."
+                } 
+                else {
+                    Add-LogMsg -type Error -MSG "Conjur Host $($conjurHostCredentials.Username) could not be created in CyberArk EPV."
+                }
+        }
+        catch {
+            Add-LogMsg -type Error -MSG $_.Exception
+        }
+}
 #endregion
 
 
@@ -307,11 +354,165 @@ for ($i=0; $i -lt $csvContent.Count; $i++){
     $lineData = $csvContent[$i].Split(",")
     
     #This is where we add the EPV User
-    #stuffs to add the EPV User
+    Add-VaultUser($lineData[0])
+    
+    Add-VaultUserAccount
+
+    
     for($j=1; $j -lt $lineData.Count){
-        #Add as a user to each safe to sync contents
+    
+
+#region [todo]
+    
+        #List Safe members, parse to see if user above exists If it doesn't, Add, if it does, Update permissions
+try {
+    $listSafeMemberUri = $API_Safes + "/" + $lineData[$j]
+
+    #Get JSON Response of ConjurSync Safe Members
+    $safeMemberResult = Get-VaultObject $listSafeMemberUri
+    $safeMembershipExists = $false
+
+    #loop through JSON response to see if the vault user from above is already a member
+    foreach ($safeMember in $safeMemberResult.members)    
+    {
+        if ($safeMember.UserName -eq $lineData[$j])
+        {$safeMembershipExists = $true}
+    }
+
+    if($safeMembershipExists -eq $false)
+    {
+        #Add the safe member
+        $newSafeMemberBody = @{member =
+            @{MemberName = $lineData[$j]
+              SearchIn = "Vault"
+              MembershipExpirationDate = ""
+              Permissions = @(
+                               @{Key = "UseAccounts"
+              Value = $true},
+              @{Key = "RetrieveAccounts"
+              Value = $true},
+              @{Key = "ListAccounts"
+              Value = $true},
+              @{Key = "AddAccounts"
+              Value = $true},
+              @{Key = "UpdateAccountContent"
+              Value = $true},
+              @{Key = "UpdateAccountProperties"
+              Value = $true},
+              @{Key = "InitiateCPMAccountManagementOperations"
+              Value = $true},
+              @{Key = "SpecifyNextAccountContent"
+              Value = $false},
+              @{Key = "RenameAccounts"
+              Value = $false},
+              @{Key = "DeleteAccounts"
+              Value = $false},
+              @{Key = "UnlockAccounts"
+              Value = $false},
+              @{Key = "ManageSafe"
+              Value = $false},
+              @{Key = "ManageSafeMembers"
+              Value = $false},
+              @{Key = "BackupSafe"
+              Value = $false},
+              @{Key = "ViewAuditLog"
+              Value = $false},
+              @{Key = "ViewSafeMembers"
+              Value = $false},
+              @{Key = "RequestsAuthorizationLevel"
+              Value = 1},
+              @{Key = "AccessWithoutConfirmation"
+              Value = $true},
+              @{Key = "CreateFolders"
+              Value = $true},
+              @{Key = "DeleteFolders"
+              Value = $true},
+              @{Key = "MoveAccountsAndFolders"
+              Value = $false}
+              )
+            }
+            } | ConvertTo-Json -Depth 3
+            
+            $addSafeMemberUri = $API_Safes + "/ConjurSync/Members"
+            if ($null -ne $(Invoke-Rest -Command Post -URI $addSafeMemberUri -Header $g_LogonHeader -Body $newSafeMemberBody)) {
+                    
+                Add-LogMsg -type Info -MSG "User $($vaultSyncUserName) permissions successfully created for ConjurSync Safe."
+            } 
+            else {
+                Add-LogMsg -type Error -MSG "User $($vaultSyncUserName) could not be added to ConjurSync Safe."
+            }
+    }
+    else
+    {
+        #update safe permissions to ensure Sync User has appropriate permissions
+        $updateSafeMemberBody = @{member =
+            @{
+              MembershipExpirationDate = ""
+              Permissions = @(
+                               @{Key = "UseAccounts"
+              Value = $true},
+              @{Key = "RetrieveAccounts"
+              Value = $true},
+              @{Key = "ListAccounts"
+              Value = $true},
+              @{Key = "AddAccounts"
+              Value = $true},
+              @{Key = "UpdateAccountContent"
+              Value = $true},
+              @{Key = "UpdateAccountProperties"
+              Value = $true},
+              @{Key = "InitiateCPMAccountManagementOperations"
+              Value = $true},
+              @{Key = "SpecifyNextAccountContent"
+              Value = $false},
+              @{Key = "RenameAccounts"
+              Value = $false},
+              @{Key = "DeleteAccounts"
+              Value = $false},
+              @{Key = "UnlockAccounts"
+              Value = $false},
+              @{Key = "ManageSafe"
+              Value = $false},
+              @{Key = "ManageSafeMembers"
+              Value = $false},
+              @{Key = "BackupSafe"
+              Value = $false},
+              @{Key = "ViewAuditLog"
+              Value = $false},
+              @{Key = "ViewSafeMembers"
+              Value = $false},
+              @{Key = "RequestsAuthorizationLevel"
+              Value = 1},
+              @{Key = "AccessWithoutConfirmation"
+              Value = $true},
+              @{Key = "CreateFolders"
+              Value = $true},
+              @{Key = "DeleteFolders"
+              Value = $true},
+              @{Key = "MoveAccountsAndFolders"
+              Value = $false}
+              )
+            }
+            } | ConvertTo-Json -Depth 3
+            
+            $updateSafeMemberUri = $API_Safes + "/ConjurSync/Members/" + $vaultSyncUserName
+            if ($null -ne $(Invoke-Rest -Command Post -URI $updateSafeMemberUri -Header $g_LogonHeader -Body $updateSafeMemberBody)) {
+                    
+                Add-LogMsg -type Info -MSG "User $($vaultSyncUserName) permissions successfully updated for ConjurSync Safe."
+            } 
+            else {
+                Add-LogMsg -type Error -MSG "User $($vaultSyncUserName) could not be updated for ConjurSync Safe."
+            }
     }
 }
+catch {
+    Add-LogMsg -type Error -MSG $_.Exception
+}
+#endregion 
+
+    }
+}
+
 
 #check for user, add if doesn't exist
 #if does exist, exit
