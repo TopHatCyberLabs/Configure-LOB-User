@@ -2,10 +2,12 @@
 param
 (
     [Parameter(Mandatory = $true, HelpMessage = "Please enter your PVWA address (For example: https://pvwa.mydomain.com)")]
-    #[ValidateScript({Invoke-WebRequest -UseBasicParsing -DisableKeepAlive -Uri $_ -Method 'Head' -ErrorAction 'stop' -TimeoutSec 30})]
     [Alias("url")]
     [String]$PVWAURL,
-
+    
+    [Parameter(Mandatory = $true, HelpMessage = "Please enter your Primary Vault IP Address")]
+    [String]$vaultIP,
+    
     # Use this switch to Disable SSL verification (NOT RECOMMENDED)
     [Parameter(Mandatory = $false)]
     [Switch]$DisableSSLVerify
@@ -34,7 +36,6 @@ $API_Logon = $URL_PVWA_Base_API + "/auth/cyberark/logon"
 $API_Logoff = $URL_PVWA_Base_API + "/auth/logoff"
 $API_VaultUsers = $URL_PIM_Base_API + "/Users"
 $API_Platforms = $URL_PVWA_Base_API + "/Platforms"
-$API_Platforms_Import = $API_Platforms + "/Import"
 $API_Safes = $URL_PIM_Base_API + "/Safes"
 $API_Accounts = $URL_PVWA_Base_API + "/accounts"
 
@@ -206,7 +207,18 @@ function Get-RandomPassword() {
     )
     
      $sourcedata=$null
-     for($a=48; $a -le 110; $a++)
+     #add numbers
+     for($a=48; $a -lt 58; $a++)
+     {
+        $sourcedata+=,[char][byte]$a
+     }
+     #add uppercase letters
+     for($a=65; $a -lt 91; $a++)
+     {
+        $sourcedata+=,[char][byte]$a
+     }
+     #add lowercase letters
+     for($a=97; $a -lt 123; $a++)
      {
         $sourcedata+=,[char][byte]$a
      }
@@ -238,32 +250,198 @@ function Add-VaultUser {
             #Write to log that the user already exists
             Add-LogMsg -type Info -MSG "Vault User $($vaultUserName) already exists, will not create vault user."
         }
+        return $vaultUserInitialPassword
     }
     catch {
         Add-LogMsg -type Error -MSG $_.Exception
     }
 }
 
-function Add-VaultUserAccount {
-    param ()
+function Add-Account{
+    param (
+        [Parameter(Mandatory = $true)]
+        [String]$acctUserName,
+        [Parameter(Mandatory = $true)]
+        [String]$acctAddress,
+        [Parameter(Mandatory = $true)]
+        [String]$platformId,
+        [Parameter(Mandatory = $true)]
+        [String]$safeName,
+        [Parameter(Mandatory = $true)]
+        [String]$secretType,
+        [Parameter(Mandatory = $true)]
+        [String]$secret
+        )
     try {
         #Future Feature - Search for Account before adding. 
-            $conjurHostCredentialsPath = Get-ChildItem -Name synchronizerConjurHost.xml -File -Path $ScriptLocation -Recurse
-            $conjurHostCredentials = Import-Clixml -Path $conjurHostCredentialsPath
-        
-            $newAccountBody = @{ platformId="ConjurHost";safeName="ConjurSync";secretType="password";secret=$conjurHostCredentials.GetNetworkCredential().password;platformAccountProperties= @{ ConjurAccount=$conjurAccountName; HostName=$conjurHostCredentials.UserName; ApplianceURL="https://"+$conjurServerDNS }} | ConvertTo-Json
-                if ($null -ne $(Invoke-Rest -Command Post -URI $API_Accounts -Header $g_LogonHeader -Body $newAccountBody)) {
+         $addAccountBody = @{ userName=$acctUserName; address=$acctAddress; platformId=$platformId; safeName=$safeName; secretType=$secretType; secret=$secret} | ConvertTo-Json 
+                if ($null -ne $(Invoke-Rest -Command Post -URI $API_Accounts -Header $g_LogonHeader -Body $addAccountBody)) {
                             
-                    Add-LogMsg -type Info -MSG "Conjur Host $($conjurHostCredentials.Username) successfully added to CyberArk EPV."
+                    Add-LogMsg -type Info -MSG "Account $($acctUserName) successfully added to $($safeName) safe."
                 } 
                 else {
-                    Add-LogMsg -type Error -MSG "Conjur Host $($conjurHostCredentials.Username) could not be created in CyberArk EPV."
+                    Add-LogMsg -type Error -MSG "Account $($acctUserName) could not be successfully added to $($safeName) safe."
                 }
         }
         catch {
             Add-LogMsg -type Error -MSG $_.Exception
         }
 }
+
+
+function Add-SafePermissions{
+    param( 
+        [Parameter(Mandatory = $true)]
+        [String]$safeName,
+        [Parameter(Mandatory = $true)]
+        [String]$userName
+        )
+          #List Safe members, parse to see if user above exists If it doesn't, Add, if it does, Update permissions
+try {
+    $listSafeMemberUri = $API_Safes + "/" + $safeName
+
+    #Get JSON Response of ConjurSync Safe Members
+    $safeMemberResult = Get-VaultObject $listSafeMemberUri
+    $safeMembershipExists = $false
+
+    #loop through JSON response to see if the vault user from above is already a member
+    foreach ($safeMember in $safeMemberResult.members)    
+    {
+        if ($safeMember.UserName -eq $userName)
+        {$safeMembershipExists = $true}
+    }
+
+    if($safeMembershipExists -eq $false)
+    {
+        #Add the safe member
+        $newSafeMemberBody = @{member =
+            @{MemberName = $userName
+              SearchIn = "Vault"
+              MembershipExpirationDate = ""
+              Permissions = @(
+                               @{Key = "UseAccounts"
+              Value = $true},
+              @{Key = "RetrieveAccounts"
+              Value = $true},
+              @{Key = "ListAccounts"
+              Value = $true},
+              @{Key = "AddAccounts"
+              Value = $false},
+              @{Key = "UpdateAccountContent"
+              Value = $false},
+              @{Key = "UpdateAccountProperties"
+              Value = $false},
+              @{Key = "InitiateCPMAccountManagementOperations"
+              Value = $false},
+              @{Key = "SpecifyNextAccountContent"
+              Value = $false},
+              @{Key = "RenameAccounts"
+              Value = $false},
+              @{Key = "DeleteAccounts"
+              Value = $false},
+              @{Key = "UnlockAccounts"
+              Value = $false},
+              @{Key = "ManageSafe"
+              Value = $false},
+              @{Key = "ManageSafeMembers"
+              Value = $false},
+              @{Key = "BackupSafe"
+              Value = $false},
+              @{Key = "ViewAuditLog"
+              Value = $false},
+              @{Key = "ViewSafeMembers"
+              Value = $false},
+              @{Key = "RequestsAuthorizationLevel"
+              Value = 0},
+              @{Key = "AccessWithoutConfirmation"
+              Value = $true},
+              @{Key = "CreateFolders"
+              Value = $false},
+              @{Key = "DeleteFolders"
+              Value = $false},
+              @{Key = "MoveAccountsAndFolders"
+              Value = $false}
+              )
+            }
+            } | ConvertTo-Json -Depth 3
+            
+            $addSafeMemberUri = $API_Safes + "/" + $safeName +"/Members"
+            if ($null -ne $(Invoke-Rest -Command Post -URI $addSafeMemberUri -Header $g_LogonHeader -Body $newSafeMemberBody)) {
+                    
+                Add-LogMsg -type Info -MSG "User $($userName) permissions successfully created for $($safeName) Safe."
+            } 
+            else {
+                Add-LogMsg -type Error -MSG "User $($userName) could not be added to $($safeName) Safe."
+            }
+    }
+    else
+    {
+        #update safe permissions to ensure Sync User has appropriate permissions
+        $updateSafeMemberBody = @{member =
+            @{
+              MembershipExpirationDate = ""
+              Permissions = @(
+                               @{Key = "UseAccounts"
+              Value = $true},
+              @{Key = "RetrieveAccounts"
+              Value = $true},
+              @{Key = "ListAccounts"
+              Value = $true},
+              @{Key = "AddAccounts"
+              Value = $false},
+              @{Key = "UpdateAccountContent"
+              Value = $false},
+              @{Key = "UpdateAccountProperties"
+              Value = $false},
+              @{Key = "InitiateCPMAccountManagementOperations"
+              Value = $false},
+              @{Key = "SpecifyNextAccountContent"
+              Value = $false},
+              @{Key = "RenameAccounts"
+              Value = $false},
+              @{Key = "DeleteAccounts"
+              Value = $false},
+              @{Key = "UnlockAccounts"
+              Value = $false},
+              @{Key = "ManageSafe"
+              Value = $false},
+              @{Key = "ManageSafeMembers"
+              Value = $false},
+              @{Key = "BackupSafe"
+              Value = $false},
+              @{Key = "ViewAuditLog"
+              Value = $false},
+              @{Key = "ViewSafeMembers"
+              Value = $false},
+              @{Key = "RequestsAuthorizationLevel"
+              Value = 0},
+              @{Key = "AccessWithoutConfirmation"
+              Value = $true},
+              @{Key = "CreateFolders"
+              Value = $false},
+              @{Key = "DeleteFolders"
+              Value = $false},
+              @{Key = "MoveAccountsAndFolders"
+              Value = $false}
+              )
+            }
+            } | ConvertTo-Json -Depth 3
+            
+            $updateSafeMemberUri = $API_Safes + "/" + $safeName + "/Members/" + $userName
+            if ($null -ne $(Invoke-Rest -Command PUT -URI $updateSafeMemberUri -Header $g_LogonHeader -Body $updateSafeMemberBody)) {
+                    
+                Add-LogMsg -type Info -MSG "User $($userName) permissions successfully updated for $($safeName) Safe."
+            } 
+            else {
+                Add-LogMsg -type Error -MSG "User $($userName) could not be updated for $($safeName) Safe."
+            }
+    }
+}
+catch {
+    Add-LogMsg -type Error -MSG $_.Exception
+}
+}
+
 #endregion
 
 
@@ -354,165 +532,22 @@ for ($i=0; $i -lt $csvContent.Count; $i++){
     $lineData = $csvContent[$i].Split(",")
     
     #This is where we add the EPV User
-    Add-VaultUser($lineData[0])
-    
-    Add-VaultUserAccount
+    $lobUserName = $lineData[0]
+    $vaultUserPassword = Add-VaultUser($lobUserName)
+   
+    Add-Account -acctUserName $lobUserName -acctAddress $vaultIP -platformId "CyberArk" -safeName "ConjurSync" -secretType "password" -secret $vaultUserPassword
 
     
-    for($j=1; $j -lt $lineData.Count){
-    
-
-#region [todo]
-    
-        #List Safe members, parse to see if user above exists If it doesn't, Add, if it does, Update permissions
-try {
-    $listSafeMemberUri = $API_Safes + "/" + $lineData[$j]
-
-    #Get JSON Response of ConjurSync Safe Members
-    $safeMemberResult = Get-VaultObject $listSafeMemberUri
-    $safeMembershipExists = $false
-
-    #loop through JSON response to see if the vault user from above is already a member
-    foreach ($safeMember in $safeMemberResult.members)    
-    {
-        if ($safeMember.UserName -eq $lineData[$j])
-        {$safeMembershipExists = $true}
-    }
-
-    if($safeMembershipExists -eq $false)
-    {
-        #Add the safe member
-        $newSafeMemberBody = @{member =
-            @{MemberName = $lineData[$j]
-              SearchIn = "Vault"
-              MembershipExpirationDate = ""
-              Permissions = @(
-                               @{Key = "UseAccounts"
-              Value = $true},
-              @{Key = "RetrieveAccounts"
-              Value = $true},
-              @{Key = "ListAccounts"
-              Value = $true},
-              @{Key = "AddAccounts"
-              Value = $true},
-              @{Key = "UpdateAccountContent"
-              Value = $true},
-              @{Key = "UpdateAccountProperties"
-              Value = $true},
-              @{Key = "InitiateCPMAccountManagementOperations"
-              Value = $true},
-              @{Key = "SpecifyNextAccountContent"
-              Value = $false},
-              @{Key = "RenameAccounts"
-              Value = $false},
-              @{Key = "DeleteAccounts"
-              Value = $false},
-              @{Key = "UnlockAccounts"
-              Value = $false},
-              @{Key = "ManageSafe"
-              Value = $false},
-              @{Key = "ManageSafeMembers"
-              Value = $false},
-              @{Key = "BackupSafe"
-              Value = $false},
-              @{Key = "ViewAuditLog"
-              Value = $false},
-              @{Key = "ViewSafeMembers"
-              Value = $false},
-              @{Key = "RequestsAuthorizationLevel"
-              Value = 1},
-              @{Key = "AccessWithoutConfirmation"
-              Value = $true},
-              @{Key = "CreateFolders"
-              Value = $true},
-              @{Key = "DeleteFolders"
-              Value = $true},
-              @{Key = "MoveAccountsAndFolders"
-              Value = $false}
-              )
-            }
-            } | ConvertTo-Json -Depth 3
-            
-            $addSafeMemberUri = $API_Safes + "/ConjurSync/Members"
-            if ($null -ne $(Invoke-Rest -Command Post -URI $addSafeMemberUri -Header $g_LogonHeader -Body $newSafeMemberBody)) {
-                    
-                Add-LogMsg -type Info -MSG "User $($vaultSyncUserName) permissions successfully created for ConjurSync Safe."
-            } 
-            else {
-                Add-LogMsg -type Error -MSG "User $($vaultSyncUserName) could not be added to ConjurSync Safe."
-            }
-    }
-    else
-    {
-        #update safe permissions to ensure Sync User has appropriate permissions
-        $updateSafeMemberBody = @{member =
-            @{
-              MembershipExpirationDate = ""
-              Permissions = @(
-                               @{Key = "UseAccounts"
-              Value = $true},
-              @{Key = "RetrieveAccounts"
-              Value = $true},
-              @{Key = "ListAccounts"
-              Value = $true},
-              @{Key = "AddAccounts"
-              Value = $true},
-              @{Key = "UpdateAccountContent"
-              Value = $true},
-              @{Key = "UpdateAccountProperties"
-              Value = $true},
-              @{Key = "InitiateCPMAccountManagementOperations"
-              Value = $true},
-              @{Key = "SpecifyNextAccountContent"
-              Value = $false},
-              @{Key = "RenameAccounts"
-              Value = $false},
-              @{Key = "DeleteAccounts"
-              Value = $false},
-              @{Key = "UnlockAccounts"
-              Value = $false},
-              @{Key = "ManageSafe"
-              Value = $false},
-              @{Key = "ManageSafeMembers"
-              Value = $false},
-              @{Key = "BackupSafe"
-              Value = $false},
-              @{Key = "ViewAuditLog"
-              Value = $false},
-              @{Key = "ViewSafeMembers"
-              Value = $false},
-              @{Key = "RequestsAuthorizationLevel"
-              Value = 1},
-              @{Key = "AccessWithoutConfirmation"
-              Value = $true},
-              @{Key = "CreateFolders"
-              Value = $true},
-              @{Key = "DeleteFolders"
-              Value = $true},
-              @{Key = "MoveAccountsAndFolders"
-              Value = $false}
-              )
-            }
-            } | ConvertTo-Json -Depth 3
-            
-            $updateSafeMemberUri = $API_Safes + "/ConjurSync/Members/" + $vaultSyncUserName
-            if ($null -ne $(Invoke-Rest -Command Post -URI $updateSafeMemberUri -Header $g_LogonHeader -Body $updateSafeMemberBody)) {
-                    
-                Add-LogMsg -type Info -MSG "User $($vaultSyncUserName) permissions successfully updated for ConjurSync Safe."
-            } 
-            else {
-                Add-LogMsg -type Error -MSG "User $($vaultSyncUserName) could not be updated for ConjurSync Safe."
-            }
-    }
-}
-catch {
-    Add-LogMsg -type Error -MSG $_.Exception
-}
-#endregion 
-
+    for($j=1; $j -lt $lineData.Count; $j++){
+    #assign permissions to each safe the LOB User will sync
+    Add-SafePermissions -safeName $lineData[$j] -userName $lobUserName
     }
 }
 
+#region [Logoff]
+# Logoff the session
+# ------------------
+Invoke-Rest -Uri $API_Logoff -Header $g_LogonHeader -Command "Post"
+# Footer
 
-#check for user, add if doesn't exist
-#if does exist, exit
+#endregion
