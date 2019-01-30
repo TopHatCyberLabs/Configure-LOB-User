@@ -35,7 +35,6 @@ $URL_PIM_Base_API = $PVWAURL + "/PasswordVault/WebServices/PIMServices.svc"
 $API_Logon = $URL_PVWA_Base_API + "/auth/cyberark/logon"
 $API_Logoff = $URL_PVWA_Base_API + "/auth/logoff"
 $API_VaultUsers = $URL_PIM_Base_API + "/Users"
-$API_Platforms = $URL_PVWA_Base_API + "/Platforms"
 $API_Safes = $URL_PIM_Base_API + "/Safes"
 $API_Accounts = $URL_PVWA_Base_API + "/accounts"
 
