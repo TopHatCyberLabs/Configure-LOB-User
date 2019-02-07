@@ -269,13 +269,11 @@ function Add-Account{
         [Parameter(Mandatory = $true)]
         [String]$secretType,
         [Parameter(Mandatory = $true)]
-        [String]$secret,
-        [Parameter(Mandatory = $false)]
-        [String]$cyberArkAcctName
+        [String]$secret
         )
     try {
         #Future Feature - Search for Account before adding. 
-         $addAccountBody = @{ name=$cyberArkAcctName; userName=$acctUserName; address=$acctAddress; platformId=$platformId; safeName=$safeName; secretType=$secretType; secret=$secret} | ConvertTo-Json 
+         $addAccountBody = @{ userName=$acctUserName; address=$acctAddress; platformId=$platformId; safeName=$safeName; secretType=$secretType; secret=$secret} | ConvertTo-Json 
                 if ($null -ne $(Invoke-Rest -Command Post -URI $API_Accounts -Header $g_LogonHeader -Body $addAccountBody)) {
                             
                     Add-LogMsg -type Info -MSG "Account $($acctUserName) successfully added to $($safeName) safe."
