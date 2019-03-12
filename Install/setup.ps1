@@ -269,11 +269,13 @@ function Add-Account{
         [Parameter(Mandatory = $true)]
         [String]$secretType,
         [Parameter(Mandatory = $true)]
-        [String]$secret
+        [String]$secret,
+        [Parameter(Mandatory = $false)]
+        [String]$cyberArkAcctName
         )
     try {
         #Future Feature - Search for Account before adding. 
-         $addAccountBody = @{ userName=$acctUserName; address=$acctAddress; platformId=$platformId; safeName=$safeName; secretType=$secretType; secret=$secret} | ConvertTo-Json 
+         $addAccountBody = @{ name=$cyberArkAcctName; userName=$acctUserName; address=$acctAddress; platformId=$platformId; safeName=$safeName; secretType=$secretType; secret=$secret} | ConvertTo-Json 
                 if ($null -ne $(Invoke-Rest -Command Post -URI $API_Accounts -Header $g_LogonHeader -Body $addAccountBody)) {
                             
                     Add-LogMsg -type Info -MSG "Account $($acctUserName) successfully added to $($safeName) safe."
@@ -538,7 +540,7 @@ for ($i=0; $i -lt $csvContent.Count; $i++){
     $lobUserName = $lineData[0]
     $vaultUserPassword = Add-VaultUser($lobUserName)
    
-    Add-Account -acctUserName $lobUserName -acctAddress $vaultIP -platformId "CyberArk" -safeName "ConjurSync" -secretType "password" -secret $vaultUserPassword
+    Add-Account -cyberArkAcctName $lobUserName -acctUserName $lobUserName -acctAddress $vaultIP -platformId "CyberArk" -safeName "ConjurSync" -secretType "password" -secret $vaultUserPassword
 
     
     for($j=1; $j -lt $lineData.Count; $j++){
